@@ -40,6 +40,7 @@ function makeRow(sugg, match, fallbackText) {
     consensus: sugg?.consensus || null, fields: sugg ? { ...sugg.fields } : blankFields(fallbackText),
     confirmed: {}, match: match || null };
   r.fields.name = uniqueName(r.fields.name || fallbackText);
+  r.original = sugg ? { ...r.fields } : null;  // what consensus suggested, for "edited" markers and reset
   return r;
 }
 
@@ -50,6 +51,14 @@ function relevant(r, k) {
   if (k === "scale_categories") return needsCats(r);
   return true;
 }
+
+/* Has the user changed this field away from what consensus suggested? */
+function isEdited(r, k) {
+  if (!r.original) return false;
+  if (k === "scale_class" && val(r, "method_class") === "Computation") return false;  // forced by the template
+  return String(val(r, k)).trim() !== String(r.original[k] ?? "").trim();
+}
+const editedKeys = r => Object.keys(r.original || {}).filter(k => isEdited(r, k));
 
 /* A consensus field the user still has to decide on: contested and not yet confirmed. */
 function decisions(r) {
@@ -87,6 +96,7 @@ function validate(r) {
 /* Visual state of one cell: strong/limited/weak (consensus-backed, unconfirmed), missing, or "" */
 function cellState(r, k, errs) {
   if (errs[k]) return "missing";
+  if (isEdited(r, k)) return "edited";
   const c = r.consensus?.[k];
   if (c && relevant(r, k) && !r.confirmed[k] && val(r, k) !== "" && val(r, k) === c.value) return c.level === "none" ? "" : c.level;
   return "";
@@ -106,7 +116,7 @@ async function addById(id, match) {
     const r = rows.find(x => x.uid === replaceUid);
     const fresh = makeRow(s, null);
     r.consensus_id = fresh.consensus_id; r.source = fresh.source; r.consensus = fresh.consensus;
-    r.fields = fresh.fields; r.fields.name = uniqueName(fresh.fields.name, r.uid); r.confirmed = {}; r.match = null;
+    r.fields = fresh.fields; r.fields.name = uniqueName(fresh.fields.name, r.uid); r.original = { ...r.fields }; r.confirmed = {}; r.match = null;
     replaceUid = null; $("#q").placeholder = defaultPlaceholder;
     toast(`Re-matched to “${s.fields.full_name}”`);
     save(); renderAll(); if (selected === r.uid) openDrawer(r.uid);
@@ -210,8 +220,9 @@ function cellHtml(r, [k, type], errs) {
 
 function stateIcon(r) {
   const s = rowStatus(r), why = { ready: "Ready", weak: "Needs a decision", missing: "Missing required fields" }[s];
+  const ed = editedKeys(r).length ? `<span title="${editedKeys(r).length} field(s) customised by you" style="color:var(--edited)">✎</span>` : "";
   const fuzzy = r.match && !r.match.exact ? `<span title="Matched “${esc(r.match.query)}” loosely — click the row to check or change the match">⚠</span>` : "";
-  return `<i class="dot ${s === "ready" ? "strong" : s}" title="${why}"></i>${fuzzy}`;
+  return `<i class="dot ${s === "ready" ? "strong" : s}" title="${why}"></i>${ed}${fuzzy}`;
 }
 
 function renderGrid() {
@@ -220,7 +231,7 @@ function renderGrid() {
     const errs = validate(r);
     return `<tr data-uid="${r.uid}" class="${r.uid === selected ? "sel" : ""}"><td class="rowstate">${stateIcon(r)}</td>${
       COLS.map(c => `<td>${cellHtml(r, c, errs)}</td>`).join("")}
-      <td style="white-space:nowrap"><button class="iconbtn" data-act="open" title="All fields">Details ›</button><button class="iconbtn" data-act="del" title="Remove">✕</button></td></tr>`;
+      <td style="white-space:nowrap"><button class="iconbtn" data-act="open" title="All fields">✎ Edit all ›</button><button class="iconbtn" data-act="del" title="Remove">✕</button></td></tr>`;
   }).join("");
 }
 
@@ -254,7 +265,7 @@ $("#grid tbody").addEventListener("click", e => {
   const tr = e.target.closest("tr"); if (!tr) return;
   const id = tr.dataset.uid, act = e.target.closest("[data-act]")?.dataset.act;
   if (act === "del") { rows = rows.filter(r => r.uid !== id); if (selected === id) closeDrawer(); save(); renderAll(); }
-  else if (act === "open" || e.target.classList.contains("rowstate") || e.target.closest(".rowstate")) openDrawer(id);
+  else if (act === "open" || !e.target.closest("input,select,button")) openDrawer(id);
 });
 $("#grid tbody").addEventListener("focusin", e => { if (e.target.closest(".cell")) { const id = e.target.closest("tr").dataset.uid; if (selected && selected !== id) openDrawer(id); } });
 
@@ -291,33 +302,70 @@ function bannerText(c, key) {
   return key === "scale_categories" ? "No consensus categories — pick a common scale below or write your own" : "No consensus data — enter a value";
 }
 
+/* Every choice offered for a field: consensus alternatives (ranked), then any other valid values. */
+function optionList(r, key) {
+  const c = r.consensus?.[key]; if (!c) return [];
+  let o = c.options.slice();
+  if (key === "scale_categories" && !o.length) o = (presetCache[`${val(r, "trait_attribute")}|${val(r, "scale_class")}`] || []).slice();
+  if (key === "method_class" || key === "scale_class") {  // the template only accepts these values, so offer all of them
+    const have = new Set(o.map(x => x.value));
+    for (const v of key === "method_class" ? meta.method_classes : meta.scale_classes)
+      if (!have.has(v)) o.push({ value: v, count: 0, source: "not used in consensus" });
+  }
+  return o;
+}
+
 function optsBlock(r, key) {
   const c = r.consensus?.[key]; if (!c) return "";
-  let options = c.options;
-  if (key === "scale_categories" && !options.length && presetCache[`${val(r, "trait_attribute")}|${val(r, "scale_class")}`])
-    options = presetCache[`${val(r, "trait_attribute")}|${val(r, "scale_class")}`];
-  if (!relevant(r, key) || (!options.length && c.level === "none" && key !== "scale_categories")) return c.level === "none" ? `<div class="banner none">${bannerText(c, key)}</div>` : "";
+  const options = optionList(r, key), edited = isEdited(r, key);
+  if (!relevant(r, key)) return "";
+  if (!options.length && c.level === "none") return `<div class="banner none">${bannerText(c, key)}</div>`;
   const max = Math.max(...options.map(o => o.count), 1), current = val(r, key);
+  const own = key === "units" || key === "scale_categories" ? `<div class="opt own" data-own="${key}">✎ Write your own…</div>` : "";
   const list = options.map((o, i) => {
-    const n = o.source === "consensus" ? `${c.agreement != null ? Math.round(c.agreement * 100) + "% agree" : "consensus"}`
+    const n = !o.count ? o.source : o.source === "consensus" ? `${c.agreement != null ? Math.round(c.agreement * 100) + "% agree" : "consensus"}`
       : o.source ? `${o.count} trait${o.count > 1 ? "s" : ""} · ${o.source}` : `${o.count} of ${c.total}`;
     return `<div class="opt ${o.value === current ? "sel" : ""}" data-k="${key}" data-i="${i}">
       <div class="bar" style="width:${Math.round(o.count / max * 100)}%"></div>
-      <span class="v">${esc(o.value)}</span>${i === 0 ? '<span class="top1">Most likely</span>' : ""}<span class="n">${esc(n)}</span></div>`;
-  }).join("");
-  const open = c.level === "weak" && !r.confirmed[key] || c.level === "none";
-  const state = c.level === "none" ? "none" : c.level;
-  return `<div class="banner ${state}">${bannerText(c, key)}</div>${options.length ? (open || options.length === 1 ? `<div class="opts" data-opts="${key}">${list}</div>`
-    : `<details><summary>See ${options.length} option${options.length > 1 ? "s" : ""}</summary><div class="opts" data-opts="${key}">${list}</div></details>`) : ""}`;
+      <span class="v">${esc(o.value)}</span>${i === 0 && o.count ? '<span class="top1">Most likely</span>' : ""}<span class="n">${esc(n)}</span></div>`;
+  }).join("") + own;
+  const open = !edited && (c.level === "weak" && !r.confirmed[key] || c.level === "none");
+  const banner = edited
+    ? `<div class="banner edited">✎ Your answer — consensus suggested “${esc(String(r.original[key]).slice(0, 80))}”. <button class="link" data-reset="${key}">Reset</button></div>`
+    : `<div class="banner ${c.level}">${bannerText(c, key)}</div>`;
+  return banner + (open ? `<div class="opts" data-opts="${key}">${list}</div>`
+    : `<details><summary>See ${options.length} option${options.length > 1 ? "s" : ""}</summary><div class="opts" data-opts="${key}">${list}</div></details>`);
 }
 
 function inputField(r, key, label, errs, o = {}) {
-  const v = val(r, key), req = o.req ? '<span class="req">*</span>' : "";
+  const v = val(r, key), req = o.req ? '<span class="req">*</span>' : "", ed = isEdited(r, key) ? " edited" : "";
+  const reset = isEdited(r, key) && !o.noReset ? `<span class="edtag">edited · <button class="link" data-reset="${key}">↺ reset</button></span>` : "";
   const ctl = o.type === "select"
-    ? `<select data-f="${key}">${o.choices.map(c => `<option ${c === v ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>`
-    : o.type === "area" ? `<textarea rows="${o.rows || 2}" data-f="${key}">${esc(v)}</textarea>`
-    : `<input data-f="${key}" type="${o.type || "text"}" value="${esc(v)}">`;
-  return `<div class="field"><label>${esc(label)}${req}</label>${o.before || ""}${ctl}${errs[key] ? `<div class="err">${esc(errs[key])}</div>` : ""}${o.after || ""}${o.hint ? `<div class="hint">${o.hint}</div>` : ""}</div>`;
+    ? `<select class="${ed}" data-f="${key}">${o.choices.map(c => `<option ${c === v ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>`
+    : o.type === "area" ? `<textarea class="${ed}" rows="${o.rows || 2}" data-f="${key}">${esc(v)}</textarea>`
+    : `<input class="${ed}" data-f="${key}" type="${o.type || "text"}" value="${esc(v)}"${o.list ? ` list="${o.list}"` : ""}>`;
+  return `<div class="field"><label><span>${esc(label)}${req}</span>${reset}</label>${o.before || ""}${ctl}${errs[key] ? `<div class="err">${esc(errs[key])}</div>` : ""}${o.after || ""}${o.hint ? `<div class="hint">${o.hint}</div>` : ""}</div>`;
+}
+
+const COMMON_UNITS = ["cm", "m", "mm", "g", "kg", "kg/ha", "t/ha", "%", "day", "count", "index", "ppm", "mg/g", "°C", "mL", "L", "score"];
+const parseCats = str => String(str || "").split(";").map(x => x.trim()).filter(Boolean).map(p => { const i = p.indexOf("="); return i < 0 ? [p, ""] : [p.slice(0, i).trim(), p.slice(i + 1).trim()]; });
+const joinCats = pairs => pairs.filter(([l, m]) => l || m).map(([l, m]) => l && m ? `${l}=${m}` : (l || m)).join("; ");
+let catsText = false, catsBlank = 0;  // editor mode and pending empty rows (drawer-local UI state)
+
+function catsEditor(r, errs) {
+  const ordinal = val(r, "scale_class") === "Ordinal", ed = isEdited(r, "scale_categories");
+  const head = `<label><span>Scale categories<span class="req">*</span></span>${ed ? `<span class="edtag">edited · <button class="link" data-reset="scale_categories">↺ reset</button></span>` : ""}</label>${optsBlock(r, "scale_categories")}`;
+  const err = errs.scale_categories ? `<div class="err">${esc(errs.scale_categories)}</div>` : "";
+  if (catsText)
+    return `<div class="field">${head}<textarea class="${ed ? "edited" : ""}" rows="4" data-f="scale_categories">${esc(val(r, "scale_categories"))}</textarea>${err}
+      <div class="hint">${ordinal ? "Format: 1=Low; 2=Medium; 3=High" : "Format: Red; Green; Yellow"} · <button class="link" data-cats-mode="rows">Edit as rows</button></div></div>`;
+  const pairs = parseCats(val(r, "scale_categories")); for (let i = 0; i < catsBlank; i++) pairs.push(["", ""]);
+  return `<div class="field">${head}<div class="catrows ${ed ? "edited" : ""}">${pairs.map((p, i) => `
+    <div class="catrow"><input data-cat="l" value="${esc(p[0])}" placeholder="${ordinal ? "1" : "value"}" aria-label="Category value">
+      <span class="eq">=</span><input data-cat="m" value="${esc(p[1])}" placeholder="${ordinal ? "meaning" : "meaning (optional)"}" aria-label="Category meaning">
+      <button class="iconbtn" data-cat-del="${i}" title="Remove">✕</button></div>`).join("")}
+    <div class="catfoot"><button class="btn" data-cat-add>+ Add category</button> <button class="link" data-cats-mode="text">Edit as text</button></div></div>${err}
+    <div class="hint">“=” and “;” can't be used inside a category.</div></div>`;
 }
 
 async function loadPresets(r) {
@@ -330,6 +378,7 @@ async function loadPresets(r) {
 
 function openDrawer(id) {
   const r = rows.find(x => x.uid === id); if (!r) return;
+  if (selected !== id) { catsBlank = 0; catsText = false; }
   selected = id;
   const errs = validate(r), d = $("#drawer"), scrollTop = d.scrollTop;
   const cand = r.match && !r.match.exact ? `<div class="banner weak">⚠ “${esc(r.match.query)}” was matched loosely. Better match? ${
@@ -340,6 +389,7 @@ function openDrawer(id) {
       · <button class="link" data-rematch>Change match</button>` : `No consensus match — <button class="link" data-rematch>find a match</button>`}</div>
     ${r.source?.species?.length ? `<details><summary>Species using this trait</summary><div class="species">${esc(r.source.species.join(", "))}</div></details>` : ""}
     ${cand}
+    ${editedKeys(r).length ? `<div class="banner edited">✎ You've customised ${editedKeys(r).length} field${editedKeys(r).length > 1 ? "s" : ""}. <button class="link" data-reset-all>Reset everything to consensus</button></div>` : ""}
     <div class="two">${inputField(r, "name", "Name", errs, { req: 1, hint: "≤16 chars, unique, no periods/brackets" })}${inputField(r, "full_name", "Full name", errs)}</div>
     ${inputField(r, "description", "Description", errs, { req: 1, type: "area", rows: 3 })}
     <div class="two">${inputField(r, "trait_entity", "Trait entity", errs, { req: 1 })}${inputField(r, "trait_attribute", "Trait attribute", errs, { req: 1 })}</div>
@@ -351,11 +401,11 @@ function openDrawer(id) {
     ${val(r, "method_class") === "Computation" ? inputField(r, "method_formula", "Method formula", errs, { req: 1, type: "area" }) : ""}
     ${val(r, "method_class") === "Computation" ? `<div class="hint">Scale class is set to Numerical for computations.</div>`
       : inputField(r, "scale_class", "Scale class", errs, { req: 1, type: "select", choices: ["", ...meta.scale_classes], before: optsBlock(r, "scale_class") })}
-    ${isNumeric(r) ? inputField(r, "units", "Units", errs, { req: 1, before: optsBlock(r, "units") }) : ""}
+    ${isNumeric(r) ? inputField(r, "units", "Units", errs, { req: 1, list: "units-list", before: optsBlock(r, "units"),
+      after: `<datalist id="units-list">${[...new Set([...(r.consensus?.units.options || []).map(o => o.value), ...COMMON_UNITS])].map(u => `<option value="${esc(u)}">`).join("")}</datalist>` }) : ""}
     ${isNumeric(r) ? `<div class="two">${inputField(r, "scale_decimal_places", "Decimal places", errs, { type: "number" })}</div>
       <div class="two">${inputField(r, "scale_lower_limit", "Lower limit", errs, { type: "number" })}${inputField(r, "scale_upper_limit", "Upper limit", errs, { type: "number" })}</div>` : ""}
-    ${needsCats(r) ? inputField(r, "scale_categories", "Scale categories", errs, { req: 1, type: "area", rows: 4, before: optsBlock(r, "scale_categories"),
-      hint: val(r, "scale_class") === "Ordinal" ? "Format: 1=Low; 2=Medium; 3=High" : "Format: Red; Green; Yellow" }) : ""}`;
+    ${needsCats(r) ? catsEditor(r, errs) : ""}`;
   d.hidden = false; d.scrollTop = scrollTop;
   document.querySelectorAll("#grid tr.sel").forEach(t => t.classList.remove("sel"));
   $(`tr[data-uid="${id}"]`)?.classList.add("sel");
@@ -363,7 +413,14 @@ function openDrawer(id) {
 }
 function closeDrawer() { selected = null; $("#drawer").hidden = true; document.querySelectorAll("#grid tr.sel").forEach(t => t.classList.remove("sel")); }
 
+function readCats() {
+  return [...document.querySelectorAll("#drawer .catrow")].map(row => [...row.querySelectorAll("input")].map(i => i.value));
+}
 $("#drawer").addEventListener("input", e => {
+  if (e.target.dataset.cat) {  // structured category rows → "label=meaning; …"
+    e.target.value = e.target.value.replace(/[=;]/g, "");
+    return setField(rows.find(x => x.uid === selected), "scale_categories", joinCats(readCats()));
+  }
   const k = e.target.dataset.f; if (!k || e.target.tagName === "SELECT") return;
   setField(rows.find(x => x.uid === selected), k, e.target.value);
 });
@@ -378,13 +435,33 @@ $("#drawer").addEventListener("click", e => {
   if (e.target.closest("[data-close]")) return closeDrawer();
   if (e.target.closest("[data-rematch]")) { replaceUid = r.uid; $("#q").placeholder = `Search for the right match for “${val(r, "full_name") || val(r, "name")}”…`; $("#q").focus(); window.scrollTo({ top: 0, behavior: "smooth" }); return; }
   const cand = e.target.closest("[data-cand]"); if (cand) { replaceUid = r.uid; addById(cand.dataset.cand); return; }
+  const reset = e.target.closest("[data-reset]");
+  if (reset) { resetField(r, reset.dataset.reset); renderGrid(); return openDrawer(r.uid); }
+  if (e.target.closest("[data-reset-all]")) { r.fields = { ...r.original }; r.confirmed = {}; save(); renderGrid(); renderSummary(); return openDrawer(r.uid); }
+  const mode = e.target.closest("[data-cats-mode]");
+  if (mode) { catsText = mode.dataset.catsMode === "text"; catsBlank = 0; return openDrawer(r.uid); }
+  const del = e.target.closest("[data-cat-del]");
+  if (del) { const p = readCats(); p.splice(+del.dataset.catDel, 1); catsBlank = 0; setField(r, "scale_categories", joinCats(p)); return openDrawer(r.uid); }
+  if (e.target.closest("[data-cat-add]")) {
+    const p = readCats(), ordinal = val(r, "scale_class") === "Ordinal";
+    if (ordinal) { const nums = p.map(x => parseFloat(x[0])).filter(Number.isFinite); p.push([String((nums.length ? Math.max(...nums) : 0) + 1), ""]); setField(r, "scale_categories", joinCats(p)); }
+    else catsBlank++;
+    openDrawer(r.uid);
+    const rowsEls = document.querySelectorAll("#drawer .catrow"), last = rowsEls[rowsEls.length - 1];
+    return last?.querySelector(ordinal ? '[data-cat="m"]' : '[data-cat="l"]').focus();
+  }
+  const own = e.target.closest("[data-own]");
+  if (own) {
+    if (own.dataset.own === "scale_categories") { catsBlank++; openDrawer(r.uid); const rs = document.querySelectorAll("#drawer .catrow"); return rs[rs.length - 1]?.querySelector("input").focus(); }
+    const inp = $(`#drawer [data-f="${own.dataset.own}"]`); inp.focus(); inp.select(); return;
+  }
   const opt = e.target.closest(".opt"); if (!opt) return;
-  const k = opt.dataset.k, c = r.consensus[k];
-  const list = c.options.length ? c.options : presetCache[`${val(r, "trait_attribute")}|${val(r, "scale_class")}`] || [];
-  choose(r, k, list[+opt.dataset.i].value);
-  renderGrid(); openDrawer(r.uid);
+  const k = opt.dataset.k;
+  choose(r, k, optionList(r, k)[+opt.dataset.i].value);
+  catsBlank = 0; renderGrid(); openDrawer(r.uid);
 });
 function choose(r, k, v) { setField(r, k, v); }
+function resetField(r, k) { r.fields[k] = r.original[k]; delete r.confirmed[k]; save(); renderSummary(); }
 
 /* ---------- decision review (keyboard-first) ---------- */
 let skipped = new Set();
@@ -409,24 +486,42 @@ function stepReview() {
     ${opts.map((o, i) => `<div class="opt" data-i="${i}"><span class="kbd">${i + 1}</span><div class="bar" style="width:${Math.round(o.count / Math.max(...opts.map(x => x.count)) * 100)}%"></div>
       <span class="v" style="white-space:pre-wrap">${esc(o.value)}</span>${i === 0 ? '<span class="top1">Most likely</span>' : ""}
       <span class="n">${o.source ? esc(o.source) : `${o.count} of ${c.total}`}</span></div>`).join("")}
-    <div class="mfoot"><span class="hint"><span class="kbd">1</span>–<span class="kbd">${opts.length}</span> choose · <span class="kbd">Enter</span> most likely · <span class="kbd">S</span> skip · <span class="kbd">Esc</span> close</span>
+    <div id="ownbox">${ownRow(r, k)}</div>
+    <div class="mfoot"><span class="hint"><span class="kbd">1</span>–<span class="kbd">${opts.length}</span> choose · <span class="kbd">Enter</span> most likely · <span class="kbd">W</span> write your own · <span class="kbd">S</span> skip · <span class="kbd">Esc</span> close</span>
       <button class="btn" data-skip>Skip</button></div></div>`;
   m.hidden = false;
   document.removeEventListener("keydown", reviewKeys); document.addEventListener("keydown", reviewKeys);
   m.onclick = e => {
     if (e.target === m) return endReview();
     if (e.target.closest("[data-skip]")) return skip(r, k);
+    if (e.target.closest("[data-own]")) return openOwn(r, k);
+    if (e.target.closest("[data-own-save]")) return saveOwn(r, k);
     const o = e.target.closest(".opt"); if (o) take(r, k, opts[+o.dataset.i].value);
   };
 }
+const FIXED = { method_class: () => meta.method_classes, scale_class: () => meta.scale_classes };
+const ownRow = () => `<div class="opt own" data-own>✎ Write your own… <span class="kbd">W</span></div>`;
+function openOwn(r, k) {
+  const cur = esc(val(r, k));
+  const ctl = FIXED[k] ? `<select id="ownval">${FIXED[k]().map(v => `<option ${v === val(r, k) ? "selected" : ""}>${esc(v)}</option>`).join("")}</select>`
+    : k === "scale_categories" ? `<textarea id="ownval" rows="4" placeholder="1=Low; 2=Medium; 3=High">${cur}</textarea>`
+    : `<input id="ownval" value="${cur}" placeholder="e.g. kg/ha">`;
+  $("#ownbox").innerHTML = `<div class="ownform">${ctl}<button class="btn primary" data-own-save>Use this</button></div>
+    <div class="hint">${FIXED[k] ? "The template only accepts these values." : k === "scale_categories" ? "Separate categories with ; and use = between value and meaning." : "Any unit is accepted."}</div>`;
+  $("#ownval").focus();
+  $("#ownval").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); saveOwn(r, k); } });
+}
+function saveOwn(r, k) { const v = $("#ownval").value.trim(); if (v) take(r, k, v); }
 function reviewKeys(e) {
   if ($("#modal").hidden) return;
+  if (["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName)) { if (e.key === "Escape") endReview(); return; }
   const q = reviewQueue(); if (!q.length) return;
   const { r, k } = q[0], opts = r.consensus[k].options.slice(0, 9);
   if (e.key === "Escape") endReview();
   else if (e.key === "Enter") { e.preventDefault(); take(r, k, opts[0].value); }
   else if (/^[1-9]$/.test(e.key) && opts[+e.key - 1]) take(r, k, opts[+e.key - 1].value);
   else if (e.key.toLowerCase() === "s") skip(r, k);
+  else if (e.key.toLowerCase() === "w") { e.preventDefault(); openOwn(r, k); }
 }
 function take(r, k, v) { setField(r, k, v); renderGrid(); stepReview(); }
 function skip(r, k) { skipped.add(r.uid + k); stepReview(); }

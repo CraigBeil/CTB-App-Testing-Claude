@@ -1,12 +1,12 @@
 :root{
   --bg:#f6f7f9;--card:#fff;--ink:#1c2430;--mute:#6b7685;--line:#e3e7ed;--accent:#2f6fed;--accent-ink:#fff;
   --strong:#1f9d55;--strong-bg:#e8f6ee;--limited:#3b82c4;--limited-bg:#e9f2fb;
-  --weak:#d9822b;--weak-bg:#fdf1e2;--missing:#d64545;--missing-bg:#fdeaea;
+  --weak:#d9822b;--weak-bg:#fdf1e2;--missing:#d64545;--missing-bg:#fdeaea;--edited:#7a4fd8;--edited-bg:#f0eafc;
 }
 @media (prefers-color-scheme:dark){:root{
   --bg:#12161c;--card:#1a2029;--ink:#e8ecf2;--mute:#97a2b1;--line:#2b3340;--accent:#6b9bff;--accent-ink:#0b1220;
   --strong:#4cc38a;--strong-bg:#173126;--limited:#6fb0ee;--limited-bg:#172a3d;
-  --weak:#f0a65a;--weak-bg:#3a2a15;--missing:#f07b7b;--missing-bg:#3c1b1b;
+  --weak:#f0a65a;--weak-bg:#3a2a15;--missing:#f07b7b;--missing-bg:#3c1b1b;--edited:#b794ff;--edited-bg:#2c2347;
 }}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -104,3 +104,20 @@ details summary{cursor:pointer;color:var(--accent);font-size:12px}
 .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:8px;z-index:70}
 .toast[hidden]{display:none}
 @media (max-width:640px){.two{grid-template-columns:1fr}.top{padding:10px 12px}}
+
+/* user edits */
+.cell.edited{background:var(--edited-bg);border-color:var(--edited)}
+.dot.edited{background:var(--edited)}
+.pill.edited,.banner.edited{background:var(--edited-bg);color:var(--edited)}
+.field input.edited,.field select.edited,.field textarea.edited,.catrows.edited{border-color:var(--edited);box-shadow:inset 3px 0 0 var(--edited)}
+.field>label{gap:8px}
+.edtag{font-weight:400;color:var(--edited);font-size:12px}
+.opt.own{color:var(--accent);font-weight:600}
+.ownform{display:flex;gap:8px;margin-top:8px;align-items:flex-start}
+.ownform input,.ownform select,.ownform textarea{flex:1;padding:8px 10px;border:1px solid var(--accent);border-radius:6px;background:var(--bg)}
+#ownbox{margin-top:8px}
+.catrows{border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--bg)}
+.catrow{display:grid;grid-template-columns:90px 14px 1fr 30px;gap:6px;align-items:center;margin-bottom:6px}
+.catrow input{background:var(--card)}
+.catrow .eq{color:var(--mute);text-align:center}
+.catfoot{display:flex;gap:12px;align-items:center}

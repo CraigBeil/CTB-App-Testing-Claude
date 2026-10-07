@@ -30,3 +30,11 @@ Validation follows the template README (name ≤16 chars/unique/no periods or br
 attribute, method class required; formula for Computation; units for Numerical; categories for Ordinal/Nominal).
 Computation methods force Scale Class = Numerical, as the template specifies. The export fills the real template's
 `Data` sheet, leaving README/Example intact. Drafts persist in the browser (localStorage).
+
+## Editing consensus answers
+
+Every field can be overridden. Click anywhere on a row (or **✎ Edit all**) to open the full editor.
+- Option lists end with **Write your own…** (units, categories); method/scale class also list every other value the template accepts.
+- In the review pop-up press `W` to write your own answer instead of choosing a listed one.
+- Scale categories use a row editor (value = meaning, + add, ✕ remove) with an **Edit as text** switch.
+- Anything you change turns purple (✎); each field has **↺ reset** to return to the consensus value, and the editor has **Reset everything to consensus**.
