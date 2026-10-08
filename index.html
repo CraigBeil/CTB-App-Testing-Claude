@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trait Ontology Builder</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="appbar">
+  <b>Trait Ontology Builder</b>
+  <span id="dbstats"></span>
+</header>
+
+<div class="layout">
+  <aside class="matches" aria-label="Matching traits">
+    <div class="mhead">Matching traits <span id="matchCount"></span></div>
+    <div id="matchList"><p class="mempty">Start typing a trait name in <b>Name</b> to see matching traits from the consensus database.</p></div>
+    <div class="legend">
+      <span><i class="lv strong"></i>Strong agreement</span>
+      <span><i class="lv limited"></i>Few sources</span>
+      <span><i class="lv weak"></i>Contested</span>
+    </div>
+  </aside>
+
+  <main class="term">
+    <div class="term-head">
+      <h1>Ontology Term</h1>
+      <label class="toggle"><span>Active</span><input type="checkbox" id="active" checked><i></i></label>
+    </div>
+
+    <div class="row">
+      <label for="term_type">Term Type<span class="req">*</span></label>
+      <div class="ctl"><select id="term_type" data-f="term_type"><option>Phenotype</option></select></div>
+    </div>
+
+    <div class="row">
+      <label for="name">Name<span class="req">*</span></label>
+      <div class="ctl">
+        <input id="name" placeholder="Ontology Term Name" autocomplete="off" spellcheck="false">
+        <div class="hint" id="nameHint"></div>
+      </div>
+    </div>
+
+    <div class="row">
+      <label for="full_name">Full Name</label>
+      <div class="ctl"><input id="full_name" data-f="full_name" placeholder="Full Name"><div class="meter" data-meter="full_name"></div></div>
+    </div>
+
+    <div class="row">
+      <label for="description">Description<span class="req">*</span></label>
+      <div class="ctl"><textarea id="description" data-f="description" rows="1" placeholder="Ontology Term Description"></textarea><div class="meter" data-meter="description"></div></div>
+    </div>
+
+    <div class="row">
+      <label>Synonyms</label>
+      <div class="ctl"><div class="plain" id="synonyms"></div></div>
+    </div>
+
+    <div class="row">
+      <label for="tags">Tags</label>
+      <div class="ctl"><input id="tags" data-f="tags" list="dl-tags" placeholder="Start typing to see suggestions"><div class="meter" data-meter="tags"></div></div>
+    </div>
+
+    <div class="section">Trait = Entity + Attribute<span id="traitCompose"></span></div>
+
+    <div class="row">
+      <label for="trait_entity">Entity<span class="req">*</span></label>
+      <div class="ctl"><input id="trait_entity" data-f="trait_entity" list="dl-entity" placeholder="Start typing to see suggestions"><div class="meter" data-meter="trait_entity"></div></div>
+    </div>
+
+    <div class="row">
+      <label for="trait_attribute">Attribute<span class="req">*</span></label>
+      <div class="ctl"><input id="trait_attribute" data-f="trait_attribute" list="dl-attribute" placeholder="Start typing to see suggestions"><div class="meter" data-meter="trait_attribute"></div></div>
+    </div>
+
+    <div class="section">Method = Description + Class<span id="methodCompose"></span></div>
+
+    <div class="row">
+      <label for="method_description">Description</label>
+      <div class="ctl"><textarea id="method_description" data-f="method_description" rows="1" placeholder="Start typing to see suggestions"></textarea><div class="meter" data-meter="method_description"></div></div>
+    </div>
+
+    <div class="row">
+      <label for="method_class">Class<span class="req">*</span></label>
+      <div class="ctl">
+        <select id="method_class" data-f="method_class">
+          <option value="">Select a class</option>
+          <option>Observation</option><option>Measurement</option><option>Counting</option><option>Estimation</option><option>Computation</option>
+        </select>
+        <div class="meter" data-meter="method_class"></div>
+      </div>
+    </div>
+
+    <div class="row" id="formulaRow" hidden>
+      <label for="method_formula">Formula<span class="req">*</span></label>
+      <div class="ctl"><textarea id="method_formula" data-f="method_formula" rows="1" placeholder="Formula used to compute the trait, e.g. a / b * 100"></textarea></div>
+    </div>
+
+    <div class="section">Scale</div>
+
+    <div class="row">
+      <label for="scale_class">Class<span class="req">*</span></label>
+      <div class="ctl">
+        <select id="scale_class" data-f="scale_class">
+          <option value="">Select a scale class</option>
+          <option value="Date YYYY-MM-DD">Date</option><option>Nominal</option><option>Numerical</option><option>Ordinal</option><option>Text</option>
+        </select>
+        <div class="note" id="scaleNote">Note: additional options for this field will appear after selection</div>
+        <div class="meter" data-meter="scale_class"></div>
+      </div>
+    </div>
+
+    <div id="scaleExtra"></div>
+  </main>
+</div>
+
+<datalist id="dl-tags"></datalist><datalist id="dl-entity"></datalist><datalist id="dl-attribute"></datalist>
+<script src="data/traits.js"></script>
+<script src="logic.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

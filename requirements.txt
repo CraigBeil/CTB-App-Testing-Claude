@@ -1,5 +1,0 @@
-flask
-xlrd
-xlwt
-xlutils
-pytest
