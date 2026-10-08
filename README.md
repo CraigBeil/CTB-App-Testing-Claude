@@ -31,10 +31,21 @@ attribute, method class required; formula for Computation; units for Numerical; 
 Computation methods force Scale Class = Numerical, as the template specifies. The export fills the real template's
 `Data` sheet, leaving README/Example intact. Drafts persist in the browser (localStorage).
 
+## The form
+
+Each trait is shown as one "Ontology Term" form modelled on DeltaBreed's own (labels on the left, all fields on one screen):
+Term Type, Name, Full Name, Description, Synonyms, Tags, Entity + Attribute, Method description + class (+ formula for
+Computation), Scale class, Unit, Min/Max/Decimals, and Categories. The left list switches between traits; **Table** shows
+all traits as a spreadsheet-style grid.
+
+**Consensus match bar** — at the top of each form, an overall bar plus one bar each for Method, Scale, Units and Categories
+shows how much the published definitions agree (colour = strong / few sources / contested). The same bar appears under each
+key field, with the ranked options one click away.
+
 ## Editing consensus answers
 
-Every field can be overridden. Click anywhere on a row (or **✎ Edit all**) to open the full editor.
+Every field can be overridden.
 - Option lists end with **Write your own…** (units, categories); method/scale class also list every other value the template accepts.
 - In the review pop-up press `W` to write your own answer instead of choosing a listed one.
 - Scale categories use a row editor (value = meaning, + add, ✕ remove) with an **Edit as text** switch.
-- Anything you change turns purple (✎); each field has **↺ reset** to return to the consensus value, and the editor has **Reset everything to consensus**.
+- Anything you change turns purple (✎); each field has **↺** to return to the consensus value, and the form has **Reset everything to consensus**.

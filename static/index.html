@@ -39,7 +39,7 @@
       <div class="hint">Enter adds the top match. <button class="link" id="blankBtn">Add a blank trait</button> if nothing fits.</div>
     </div>
     <div id="tab-bulk" hidden>
-      <textarea id="bulk" rows="5" placeholder="One trait per line:&#10;Plant height&#10;Days to flowering&#10;Grain yield&#10;Leaf rust severity"></textarea>
+      <textarea id="bulk" rows="4" placeholder="One trait per line:&#10;Plant height&#10;Days to flowering&#10;Grain yield&#10;Leaf rust severity"></textarea>
       <div class="bulk-row">
         <button id="bulkBtn" class="btn primary">Match &amp; autofill</button>
         <span class="hint" id="bulkMsg"></span>
@@ -53,26 +53,34 @@
   </section>
 
   <section id="gridwrap" class="card gridcard" hidden>
-    <div class="legend">
-      <span><i class="dot strong"></i>Strong consensus — autofilled</span>
-      <span><i class="dot limited"></i>Few sources — autofilled, worth a glance</span>
-      <span><i class="dot weak"></i>Contested — please choose</span>
-      <span><i class="dot edited"></i>Edited by you</span>
-      <span><i class="dot missing"></i>Required, missing</span>
+    <div class="viewbar">
+      <div class="seg"><button data-view="form" class="on">Form</button><button data-view="table">Table</button></div>
+      <div class="legend">
+        <span><i class="dot strong"></i>Strong consensus — autofilled</span>
+        <span><i class="dot limited"></i>Few sources — autofilled, worth a glance</span>
+        <span><i class="dot weak"></i>Contested — please choose</span>
+        <span><i class="dot edited"></i>Edited by you</span>
+        <span><i class="dot missing"></i>Required, missing</span>
+      </div>
     </div>
-    <div class="tablescroll">
-      <table id="grid">
-        <thead><tr>
-          <th></th><th>Name <small>≤16</small></th><th>Full name</th><th>Entity</th><th>Attribute</th>
-          <th>Method</th><th>Scale</th><th>Units</th><th></th>
-        </tr></thead>
-        <tbody></tbody>
-      </table>
+    <div id="formview" class="formview">
+      <aside id="sidebar" class="sidebar"></aside>
+      <section id="drawer" class="formpane"></section>
+    </div>
+    <div id="tableview" hidden>
+      <div class="tablescroll">
+        <table id="grid">
+          <thead><tr>
+            <th></th><th>Name <small>≤16</small></th><th>Full name</th><th>Entity</th><th>Attribute</th>
+            <th>Method</th><th>Scale</th><th>Units</th><th></th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </div>
   </section>
 </main>
 
-<aside id="drawer" class="drawer" hidden></aside>
 <div id="modal" class="modal" hidden></div>
 <div id="toast" class="toast" hidden></div>
 <script src="app.js"></script>

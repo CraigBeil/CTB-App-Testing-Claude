@@ -8,7 +8,8 @@ const CONSENSUS_KEYS = ["method_class", "scale_class", "units", "scale_categorie
 
 let meta = { method_classes: [], scale_classes: [] };
 let rows = [];
-let selected = null;      // uid of row open in drawer
+let selected = null;      // uid of the trait shown in the form
+let view = (() => { try { return localStorage.getItem("ctb-view") || "form"; } catch (e) { return "form"; } })();
 let replaceUid = null;    // row being re-matched via the search box
 let hits = [], hitIdx = 0;
 const presetCache = {};
@@ -119,11 +120,11 @@ async function addById(id, match) {
     r.fields = fresh.fields; r.fields.name = uniqueName(fresh.fields.name, r.uid); r.original = { ...r.fields }; r.confirmed = {}; r.match = null;
     replaceUid = null; $("#q").placeholder = defaultPlaceholder;
     toast(`Re-matched to “${s.fields.full_name}”`);
-    save(); renderAll(); if (selected === r.uid) openDrawer(r.uid);
+    save(); renderAll();
     return r;
   }
   const r = makeRow(s, match);
-  rows.push(r); save(); renderAll();
+  rows.push(r); selected = r.uid; save(); renderAll();
   const d = decisions(r).length;
   toast(`Added “${s.fields.full_name}” — ${d ? d + (d > 1 ? " decisions" : " decision") + " needed" : "autofilled"}`);
   return r;
@@ -131,7 +132,7 @@ async function addById(id, match) {
 
 function addBlank(text) {
   const r = makeRow(null, null, text || "");
-  rows.push(r); save(); renderAll(); openDrawer(r.uid);
+  rows.push(r); selected = r.uid; save(); renderAll();
 }
 
 /* ---------- search box ---------- */
@@ -190,15 +191,18 @@ $("#bulkBtn").addEventListener("click", async () => {
   if (!lines.length) return;
   $("#bulkBtn").disabled = true; $("#bulkMsg").textContent = "Matching…";
   const res = await (await fetch("/api/match", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lines }) })).json();
-  let exact = 0, check = 0, blank = 0;
+  let exact = 0, check = 0, blank = 0; const firstNew = rows.length;
   for (const m of res) {
     if (!m.suggestion) { rows.push(makeRow(null, null, m.query)); blank++; continue; }
     const isExact = m.candidates[0].exact; isExact ? exact++ : check++;
     rows.push(makeRow(m.suggestion, { query: m.query, exact: isExact, candidates: m.candidates }));
   }
+  if (rows[firstNew]) selected = rows[firstNew].uid;
   save(); renderAll();
   $("#bulk").value = ""; $("#bulkBtn").disabled = false;
-  $("#bulkMsg").textContent = `${exact} exact · ${check} to double-check (⚠) · ${blank} not found (blank rows)`;
+  document.querySelector('[data-tab="one"]').click();  // collapse back to the one-line search so the form stays on screen
+  const msg = `${exact} exact · ${check} to double-check (⚠) · ${blank} not found (blank rows)`;
+  $("#bulkMsg").textContent = msg; toast(`Matched ${res.length} traits — ${msg}`);
   if (reviewQueue().length) startReview();
 });
 
@@ -236,7 +240,8 @@ function renderGrid() {
 }
 
 function syncRow(r) {  // refresh classes/values of one row without stealing focus
-  const tr = $(`tr[data-uid="${r.uid}"]`); if (!tr) return;
+  const tr = $(`tr[data-uid="${r.uid}"]`);
+  if (!tr) { renderSummary(); renderSidebar(); return; }
   const errs = validate(r);
   tr.querySelector(".rowstate").innerHTML = stateIcon(r);
   tr.querySelectorAll(".cell").forEach(el => {
@@ -246,7 +251,7 @@ function syncRow(r) {  // refresh classes/values of one row without stealing foc
     if (k === "units") { el.readOnly = off; el.placeholder = off ? "n/a" : ""; }
     if (k === "scale_class") el.disabled = val(r, "method_class") === "Computation";
   });
-  renderSummary();
+  renderSummary(); renderSidebar();
 }
 
 $("#grid tbody").addEventListener("input", e => {
@@ -258,25 +263,22 @@ $("#grid tbody").addEventListener("change", e => {
   const el = e.target.closest(".cell"); if (!el) return;
   const r = rows.find(x => x.uid === el.closest("tr").dataset.uid);
   if (["method_class", "scale_class"].includes(el.dataset.k)) renderGrid();
-  if (selected === r.uid) openDrawer(r.uid);
   renderAll(false);
 });
 $("#grid tbody").addEventListener("click", e => {
   const tr = e.target.closest("tr"); if (!tr) return;
   const id = tr.dataset.uid, act = e.target.closest("[data-act]")?.dataset.act;
-  if (act === "del") { rows = rows.filter(r => r.uid !== id); if (selected === id) closeDrawer(); save(); renderAll(); }
-  else if (act === "open" || !e.target.closest("input,select,button")) openDrawer(id);
+  if (act === "del") { rows = rows.filter(r => r.uid !== id); if (selected === id) selected = null; save(); renderAll(); }
+  else if (act === "open" || !e.target.closest("input,select,button")) showRow(id);
 });
-$("#grid tbody").addEventListener("focusin", e => { if (e.target.closest(".cell")) { const id = e.target.closest("tr").dataset.uid; if (selected && selected !== id) openDrawer(id); } });
 
 /* Single place that applies a user edit. */
-function setField(r, k, v, opts = {}) {
+function setField(r, k, v) {
   r.fields[k] = v;
   if (CONSENSUS_KEYS.includes(k)) r.confirmed[k] = true;
   if (k === "method_class" && v === "Computation") r.fields.scale_class = "Numerical";
   if (k === "name") r.fields.name = v;  // validated, not rewritten, so the user sees the problem
   save(); syncRow(r);
-  if (opts.refreshDrawer && selected === r.uid) openDrawer(r.uid);
 }
 
 function renderSummary() {
@@ -289,17 +291,64 @@ function renderSummary() {
 
 function renderAll(grid = true) {
   $("#empty").hidden = rows.length > 0; $("#gridwrap").hidden = !rows.length;
-  if (grid) renderGrid();
+  if (rows.length && !rows.some(r => r.uid === selected)) selected = rows[0].uid;
+  document.querySelectorAll("[data-view]").forEach(b => b.classList.toggle("on", b.dataset.view === view));
+  $("#formview").hidden = view !== "form"; $("#tableview").hidden = view !== "table";
+  if (rows.length && grid) { if (view === "table") renderGrid(); else openDrawer(selected); }
+  else if (rows.length) renderSidebar();
   renderSummary();
 }
 
-/* ---------- drawer ---------- */
+/* ---------- form pane ---------- */
+/* ---------- consensus similarity ---------- */
+const KEY_LABELS = { method_class: "Method", scale_class: "Scale", units: "Units", scale_categories: "Categories" };
+const STRUCTURAL = ["method_class", "scale_class"];  // changing these changes which fields exist
+const openState = new Map();                         // "uid:key" -> options list expanded?
+const cur = () => rows.find(x => x.uid === selected);
+
+function similarity(r) {
+  if (!r.consensus) return null;
+  const parts = CONSENSUS_KEYS.filter(k => relevant(r, k)).map(k => {
+    const c = r.consensus[k];
+    return { key: k, label: KEY_LABELS[k], pct: c.agreement, level: c.level, total: c.total, edited: isEdited(r, k) };
+  });
+  const known = parts.filter(p => p.pct != null);
+  const overall = known.length ? known.reduce((a, p) => a + p.pct, 0) / known.length : null;
+  const levels = known.map(p => p.level);
+  const level = levels.includes("weak") ? "weak" : levels.includes("limited") ? "limited" : levels.length ? "strong" : "none";
+  return { parts, overall, level };
+}
+const pctOf = v => (v == null ? 0 : Math.round(v * 100));
+
+function simHtml(r) {
+  const sim = similarity(r);
+  if (!sim) return `<div class="sim none" data-sim><b>No consensus match</b><span class="mtext"> — this trait is all yours to define. Use “find a match” above to pull in consensus answers.</span></div>`;
+  return `<div class="sim ${sim.level}" data-sim>
+    <div class="simtop"><b>Consensus match</b><div class="mbar big"><i style="width:${pctOf(sim.overall)}%"></i></div>
+      <span class="simpct">${sim.overall == null ? "—" : pctOf(sim.overall) + "%"}</span></div>
+    <div class="simparts">${sim.parts.map(p => `
+      <div class="part ${p.level}" title="${esc(p.label)}: ${p.pct == null ? "no consensus data" : pctOf(p.pct) + "% of " + p.total + " definitions agree"}">
+        <span class="plabel">${p.label}${p.edited ? ' <span class="edmark">✎</span>' : ""}</span>
+        <div class="mbar"><i style="width:${pctOf(p.pct)}%"></i></div>
+        <span class="ppct">${p.pct == null ? "no data" : pctOf(p.pct) + "%"}</span></div>`).join("")}</div>
+  </div>`;
+}
+
+/* ---------- per-field consensus meter + options ---------- */
 function bannerText(c, key) {
   const pctTxt = c.agreement != null ? Math.round(c.agreement * 100) + "%" : "";
   if (c.level === "strong") return `Strong consensus — ${pctTxt} of ${c.total} definitions agree`;
   if (c.level === "limited") return `Only ${c.total} source${c.total > 1 ? "s" : ""}, and they agree — autofilled; check it fits your trait`;
   if (c.level === "weak") return `Contested — the top answer is used by only ${pctTxt} of ${c.total} definitions. Please choose`;
   return key === "scale_categories" ? "No consensus categories — pick a common scale below or write your own" : "No consensus data — enter a value";
+}
+function meterText(r, key, c) {
+  const p = c.agreement != null ? Math.round(c.agreement * 100) + "%" : "";
+  if (isEdited(r, key)) return `✎ Your answer · consensus suggested “${esc(String(r.original[key]).slice(0, 60))}”`;
+  if (c.level === "strong") return `Strong · ${p} of ${c.total} definitions agree`;
+  if (c.level === "limited") return `${c.total} source${c.total > 1 ? "s" : ""}, all agree · worth a glance`;
+  if (c.level === "weak") return `Contested · top answer ${p} of ${c.total} — please choose`;
+  return key === "scale_categories" ? "No consensus categories — pick one or write your own" : "No consensus data";
 }
 
 /* Every choice offered for a field: consensus alternatives (ranked), then any other valid values. */
@@ -315,57 +364,66 @@ function optionList(r, key) {
   return o;
 }
 
-function optsBlock(r, key) {
-  const c = r.consensus?.[key]; if (!c) return "";
-  const options = optionList(r, key), edited = isEdited(r, key);
-  if (!relevant(r, key)) return "";
-  if (!options.length && c.level === "none") return `<div class="banner none">${bannerText(c, key)}</div>`;
+function optionsHtml(r, key, options, c) {
   const max = Math.max(...options.map(o => o.count), 1), current = val(r, key);
   const own = key === "units" || key === "scale_categories" ? `<div class="opt own" data-own="${key}">✎ Write your own…</div>` : "";
-  const list = options.map((o, i) => {
+  return `<div class="opts" data-opts="${key}">` + options.map((o, i) => {
     const n = !o.count ? o.source : o.source === "consensus" ? `${c.agreement != null ? Math.round(c.agreement * 100) + "% agree" : "consensus"}`
       : o.source ? `${o.count} trait${o.count > 1 ? "s" : ""} · ${o.source}` : `${o.count} of ${c.total}`;
     return `<div class="opt ${o.value === current ? "sel" : ""}" data-k="${key}" data-i="${i}">
       <div class="bar" style="width:${Math.round(o.count / max * 100)}%"></div>
       <span class="v">${esc(o.value)}</span>${i === 0 && o.count ? '<span class="top1">Most likely</span>' : ""}<span class="n">${esc(n)}</span></div>`;
-  }).join("") + own;
-  const open = !edited && (c.level === "weak" && !r.confirmed[key] || c.level === "none");
-  const banner = edited
-    ? `<div class="banner edited">✎ Your answer — consensus suggested “${esc(String(r.original[key]).slice(0, 80))}”. <button class="link" data-reset="${key}">Reset</button></div>`
-    : `<div class="banner ${c.level}">${bannerText(c, key)}</div>`;
-  return banner + (open ? `<div class="opts" data-opts="${key}">${list}</div>`
-    : `<details><summary>See ${options.length} option${options.length > 1 ? "s" : ""}</summary><div class="opts" data-opts="${key}">${list}</div></details>`);
+  }).join("") + own + `</div>`;
 }
 
-function inputField(r, key, label, errs, o = {}) {
-  const v = val(r, key), req = o.req ? '<span class="req">*</span>' : "", ed = isEdited(r, key) ? " edited" : "";
-  const reset = isEdited(r, key) && !o.noReset ? `<span class="edtag">edited · <button class="link" data-reset="${key}">↺ reset</button></span>` : "";
+function meterHtml(r, key) {
+  const c = r.consensus?.[key]; if (!c || !relevant(r, key)) return "";
+  const options = optionList(r, key), edited = isEdited(r, key), sk = r.uid + ":" + key;
+  const open = openState.has(sk) ? openState.get(sk)
+    : !edited && ((c.level === "weak" && !r.confirmed[key]) || (c.level === "none" && options.length > 0));
+  return `<div class="cmeter ${edited ? "edited" : c.level}" data-meter="${key}">
+    <div class="mline"><div class="mbar"><i style="width:${pctOf(c.agreement)}%"></i></div><span class="mtext">${meterText(r, key, c)}</span>
+      ${edited ? `<button class="link" data-reset="${key}">↺ reset</button>` : ""}
+      ${options.length ? `<button class="link" data-toggle-opts="${key}">${open ? "▴ hide" : "▾ " + options.length + " option" + (options.length > 1 ? "s" : "")}</button>` : ""}</div>
+    ${open && options.length ? optionsHtml(r, key, options, c) : ""}</div>`;
+}
+function refreshMeter(r, key) { const el = $(`#drawer [data-meter="${key}"]`); if (el) el.outerHTML = meterHtml(r, key); }
+
+/* ---------- the Ontology Term form ---------- */
+function frow(r, key, label, errs, o = {}) {
+  const v = val(r, key), ed = isEdited(r, key) ? " edited" : "";
   const ctl = o.type === "select"
-    ? `<select class="${ed}" data-f="${key}">${o.choices.map(c => `<option ${c === v ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>`
-    : o.type === "area" ? `<textarea class="${ed}" rows="${o.rows || 2}" data-f="${key}">${esc(v)}</textarea>`
-    : `<input class="${ed}" data-f="${key}" type="${o.type || "text"}" value="${esc(v)}"${o.list ? ` list="${o.list}"` : ""}>`;
-  return `<div class="field"><label><span>${esc(label)}${req}</span>${reset}</label>${o.before || ""}${ctl}${errs[key] ? `<div class="err">${esc(errs[key])}</div>` : ""}${o.after || ""}${o.hint ? `<div class="hint">${o.hint}</div>` : ""}</div>`;
+    ? `<select class="${ed}" data-f="${key}">${o.choices.map(c => `<option ${c === v ? "selected" : ""} value="${esc(c)}">${esc(c || o.placeholder || "")}</option>`).join("")}</select>`
+    : o.type === "area" ? `<textarea class="${ed}" rows="${o.rows || 2}" data-f="${key}" placeholder="${esc(o.placeholder || "")}">${esc(v)}</textarea>`
+    : `<input class="${ed}" data-f="${key}" type="${o.type || "text"}" value="${esc(v)}" placeholder="${esc(o.placeholder || "")}"${o.list ? ` list="${o.list}"` : ""}>`;
+  const reset = CONSENSUS_KEYS.includes(key) ? "" : `<button class="resetbtn" tabindex="-1" data-reset="${key}" ${isEdited(r, key) ? "" : "hidden"} title="Reset to the consensus value">↺</button>`;
+  return `<div class="frow"><label>${esc(label)}${o.req ? '<span class="req">*</span>' : ""}</label><div class="fctl">
+    <div class="ctlrow">${ctl}${o.suffix || ""}${reset}</div>
+    <div class="err" data-err="${key}" ${errs[key] ? "" : "hidden"}>${esc(errs[key] || "")}</div>${o.below || ""}${o.hint ? `<div class="hint">${o.hint}</div>` : ""}</div></div>`;
 }
 
 const COMMON_UNITS = ["cm", "m", "mm", "g", "kg", "kg/ha", "t/ha", "%", "day", "count", "index", "ppm", "mg/g", "°C", "mL", "L", "score"];
 const parseCats = str => String(str || "").split(";").map(x => x.trim()).filter(Boolean).map(p => { const i = p.indexOf("="); return i < 0 ? [p, ""] : [p.slice(0, i).trim(), p.slice(i + 1).trim()]; });
 const joinCats = pairs => pairs.filter(([l, m]) => l || m).map(([l, m]) => l && m ? `${l}=${m}` : (l || m)).join("; ");
-let catsText = false, catsBlank = 0;  // editor mode and pending empty rows (drawer-local UI state)
+let catsText = false, catsBlank = 0;  // editor mode and pending empty rows (form-local UI state)
 
 function catsEditor(r, errs) {
   const ordinal = val(r, "scale_class") === "Ordinal", ed = isEdited(r, "scale_categories");
-  const head = `<label><span>Scale categories<span class="req">*</span></span>${ed ? `<span class="edtag">edited · <button class="link" data-reset="scale_categories">↺ reset</button></span>` : ""}</label>${optsBlock(r, "scale_categories")}`;
-  const err = errs.scale_categories ? `<div class="err">${esc(errs.scale_categories)}</div>` : "";
+  const err = `<div class="err" data-err="scale_categories" ${errs.scale_categories ? "" : "hidden"}>${esc(errs.scale_categories || "")}</div>`;
+  let body;
   if (catsText)
-    return `<div class="field">${head}<textarea class="${ed ? "edited" : ""}" rows="4" data-f="scale_categories">${esc(val(r, "scale_categories"))}</textarea>${err}
-      <div class="hint">${ordinal ? "Format: 1=Low; 2=Medium; 3=High" : "Format: Red; Green; Yellow"} · <button class="link" data-cats-mode="rows">Edit as rows</button></div></div>`;
-  const pairs = parseCats(val(r, "scale_categories")); for (let i = 0; i < catsBlank; i++) pairs.push(["", ""]);
-  return `<div class="field">${head}<div class="catrows ${ed ? "edited" : ""}">${pairs.map((p, i) => `
-    <div class="catrow"><input data-cat="l" value="${esc(p[0])}" placeholder="${ordinal ? "1" : "value"}" aria-label="Category value">
-      <span class="eq">=</span><input data-cat="m" value="${esc(p[1])}" placeholder="${ordinal ? "meaning" : "meaning (optional)"}" aria-label="Category meaning">
-      <button class="iconbtn" data-cat-del="${i}" title="Remove">✕</button></div>`).join("")}
-    <div class="catfoot"><button class="btn" data-cat-add>+ Add category</button> <button class="link" data-cats-mode="text">Edit as text</button></div></div>${err}
-    <div class="hint">“=” and “;” can't be used inside a category.</div></div>`;
+    body = `<textarea class="${ed ? "edited" : ""}" rows="4" data-f="scale_categories">${esc(val(r, "scale_categories"))}</textarea>${err}
+      <div class="hint">${ordinal ? "Format: 1=Low; 2=Medium; 3=High" : "Format: Red; Green; Yellow"} · <button class="link" data-cats-mode="rows">Edit as rows</button></div>`;
+  else {
+    const pairs = parseCats(val(r, "scale_categories")); for (let i = 0; i < catsBlank; i++) pairs.push(["", ""]);
+    body = `<div class="catrows ${ed ? "edited" : ""}">${pairs.map((p, i) => `
+      <div class="catrow"><input data-cat="l" value="${esc(p[0])}" placeholder="${ordinal ? "1" : "value"}" aria-label="Category value">
+        <span class="eq">=</span><input data-cat="m" value="${esc(p[1])}" placeholder="${ordinal ? "meaning" : "meaning (optional)"}" aria-label="Category meaning">
+        <button class="iconbtn" data-cat-del="${i}" title="Remove">✕</button></div>`).join("")}
+      <div class="catfoot"><button class="btn" data-cat-add>+ Add category</button> <button class="link" data-cats-mode="text">Edit as text</button></div></div>${err}
+      <div class="hint">“=” and “;” can't be used inside a category.</div>`;
+  }
+  return `<div class="frow"><label>Categories<span class="req">*</span></label><div class="fctl">${meterHtml(r, "scale_categories")}${body}</div></div>`;
 }
 
 async function loadPresets(r) {
@@ -373,68 +431,117 @@ async function loadPresets(r) {
   const attr = val(r, "trait_attribute"), sc = val(r, "scale_class"), key = `${attr}|${sc}`;
   if (presetCache[key]) return;
   presetCache[key] = await (await fetch(`/api/categories?attribute=${encodeURIComponent(attr)}&scale_class=${sc}`)).json();
-  if (selected === r.uid) openDrawer(r.uid);
+  if (selected === r.uid && !document.activeElement?.closest("#drawer")) openDrawer(r.uid);
 }
 
-function openDrawer(id) {
+function numRow(r, errs) {
+  const n = (k, label, hint) => `<div class="numcell"><label>${label}</label><input class="${isEdited(r, k) ? "edited" : ""}" data-f="${k}" type="number" step="1" value="${esc(val(r, k))}" placeholder="${hint}"></div>`;
+  return `<div class="frow"><label></label><div class="fctl"><div class="nums">${n("scale_lower_limit", "Min", "Minimum")}${n("scale_upper_limit", "Max", "Maximum")}${n("scale_decimal_places", "Decimals", "Places")}</div>
+    <div class="err" data-err="scale_lower_limit" ${errs.scale_lower_limit ? "" : "hidden"}>${esc(errs.scale_lower_limit || "")}</div>
+    <div class="err" data-err="scale_upper_limit" ${errs.scale_upper_limit ? "" : "hidden"}>${esc(errs.scale_upper_limit || "")}</div>
+    <div class="hint">Optional. Min/Max: whole numbers only. Decimals: leave blank for integers.</div></div></div>`;
+}
+
+const composeTrait = r => `${val(r, "trait_entity")} ${val(r, "trait_attribute")}`.trim();
+const composeMethod = r => `${val(r, "method_description")} ${val(r, "method_class")}`.trim();
+
+function formHtml(r, errs) {
+  const cand = r.match && !r.match.exact ? `<div class="banner weak">⚠ “${esc(r.match.query)}” was matched loosely. Better match? ${
+    r.match.candidates.filter(c => c.consensus_id !== r.consensus_id).map(c => `<button class="link" data-cand="${c.consensus_id}">${esc(c.full_name)}</button>`).join(" · ") || "—"}</div>` : "";
+  const nEd = editedKeys(r).length, comp = val(r, "method_class") === "Computation";
+  const nameLen = String(val(r, "name")).length;
+  return `
+    <div class="fhead"><div><h2>Ontology Term</h2>
+      <div class="species">${r.consensus_id ? `Based on <b>${esc(r.consensus_id)}</b> · ${r.source.num_species} species, ${r.source.num_definitions} definitions
+        · <button class="link" data-rematch>Change match</button>` : `No consensus match — <button class="link" data-rematch>find a match</button>`}</div></div>
+      <label class="toggle"><span>${val(r, "status") === "archived" ? "Archived" : "Active"}</span><input type="checkbox" data-status ${val(r, "status") === "archived" ? "" : "checked"}><i></i></label></div>
+    ${r.source?.species?.length ? `<details class="speciesbox"><summary>Species using this trait (${r.source.species.length})</summary><div class="species">${esc(r.source.species.join(", "))}</div></details>` : ""}
+    ${simHtml(r)}
+    ${cand}
+    <div class="banner edited" data-edcount ${nEd ? "" : "hidden"}>✎ <span>${nEd} field${nEd > 1 ? "s" : ""}</span> customised by you · <button class="link" data-reset-all>Reset everything to consensus</button></div>
+    <div class="fcols">
+      <div class="fcol">
+        ${frow(r, "term_type", "Term Type", errs, { req: 1, type: "select", choices: TERM_TYPES })}
+        ${frow(r, "name", "Name", errs, { req: 1, placeholder: "Ontology Term Name", suffix: `<span class="count ${nameLen > 16 ? "over" : ""}" data-count>${nameLen}/16</span>` })}
+        ${frow(r, "full_name", "Full Name", errs, { placeholder: "Full Name" })}
+        ${frow(r, "description", "Description", errs, { req: 1, type: "area", rows: 2, placeholder: "Ontology Term Description" })}
+        ${frow(r, "synonyms", "Synonyms", errs, { placeholder: "Separate with ;" })}
+        ${frow(r, "tags", "Tags", errs, { placeholder: "Separate with ;" })}
+        <div class="fsec">Trait = Entity + Attribute = <span data-compose="trait">${esc(composeTrait(r))}</span></div>
+        ${frow(r, "trait_entity", "Entity", errs, { req: 1, placeholder: "e.g. plant, leaf, grain" })}
+        ${frow(r, "trait_attribute", "Attribute", errs, { req: 1, placeholder: "e.g. height, color" })}
+      </div>
+      <div class="fcol">
+        <div class="fsec">Method = Description + Class = <span data-compose="method">${esc(composeMethod(r))}</span></div>
+        ${frow(r, "method_description", "Description", errs, { type: "area", rows: 2, placeholder: "How the trait is collected" })}
+        ${frow(r, "method_class", "Class", errs, { req: 1, type: "select", choices: ["", ...meta.method_classes], placeholder: "Select a class", below: meterHtml(r, "method_class") })}
+        ${comp ? frow(r, "method_formula", "Formula", errs, { req: 1, type: "area", rows: 2, placeholder: "e.g. a / b * 100" }) : ""}
+        <div class="fsec">Scale</div>
+        ${comp ? `<div class="frow"><label>Class<span class="req">*</span></label><div class="fctl"><div class="hint" style="margin-top:7px">Numerical — set automatically for Computation methods.</div></div></div>`
+          : frow(r, "scale_class", "Class", errs, { req: 1, type: "select", choices: ["", ...meta.scale_classes], placeholder: "Select a scale class", below: meterHtml(r, "scale_class") })}
+        ${isNumeric(r) ? frow(r, "units", "Unit", errs, { req: 1, list: "units-list", placeholder: "Can be any measurable unit", below: meterHtml(r, "units") +
+          `<datalist id="units-list">${[...new Set([...(r.consensus?.units.options || []).map(o => o.value), ...COMMON_UNITS])].map(u => `<option value="${esc(u)}">`).join("")}</datalist>` }) : ""}
+        ${isNumeric(r) ? numRow(r, errs) : ""}
+        ${needsCats(r) ? catsEditor(r, errs) : ""}
+      </div>
+    </div>`;
+}
+
+function openDrawer(id, o = {}) {
   const r = rows.find(x => x.uid === id); if (!r) return;
   if (selected !== id) { catsBlank = 0; catsText = false; }
   selected = id;
-  const errs = validate(r), d = $("#drawer"), scrollTop = d.scrollTop;
-  const cand = r.match && !r.match.exact ? `<div class="banner weak">⚠ “${esc(r.match.query)}” was matched loosely. Better match? ${
-    r.match.candidates.filter(c => c.consensus_id !== r.consensus_id).map(c => `<button class="link" data-cand="${c.consensus_id}">${esc(c.full_name)}</button>`).join(" · ") || "—"}</div>` : "";
-  d.innerHTML = `
-    <h2><span>${esc(val(r, "full_name") || val(r, "name") || "New trait")}</span><button class="iconbtn" data-close>✕</button></h2>
-    <div class="species">${r.consensus_id ? `Based on <b>${esc(r.consensus_id)}</b> · ${r.source.num_species} species, ${r.source.num_definitions} definitions
-      · <button class="link" data-rematch>Change match</button>` : `No consensus match — <button class="link" data-rematch>find a match</button>`}</div>
-    ${r.source?.species?.length ? `<details><summary>Species using this trait</summary><div class="species">${esc(r.source.species.join(", "))}</div></details>` : ""}
-    ${cand}
-    ${editedKeys(r).length ? `<div class="banner edited">✎ You've customised ${editedKeys(r).length} field${editedKeys(r).length > 1 ? "s" : ""}. <button class="link" data-reset-all>Reset everything to consensus</button></div>` : ""}
-    <div class="two">${inputField(r, "name", "Name", errs, { req: 1, hint: "≤16 chars, unique, no periods/brackets" })}${inputField(r, "full_name", "Full name", errs)}</div>
-    ${inputField(r, "description", "Description", errs, { req: 1, type: "area", rows: 3 })}
-    <div class="two">${inputField(r, "trait_entity", "Trait entity", errs, { req: 1 })}${inputField(r, "trait_attribute", "Trait attribute", errs, { req: 1 })}</div>
-    <div class="two">${inputField(r, "tags", "Tags", errs, { hint: "separate with ;" })}${inputField(r, "synonyms", "Synonyms", errs, { hint: "separate with ;" })}</div>
-    <div class="two">${inputField(r, "term_type", "Term type", errs, { type: "select", choices: TERM_TYPES })}${inputField(r, "status", "Status", errs, { type: "select", choices: ["active", "archived"] })}</div>
-    <hr style="border:0;border-top:1px solid var(--line)">
-    ${inputField(r, "method_class", "Method class", errs, { req: 1, type: "select", choices: ["", ...meta.method_classes], before: optsBlock(r, "method_class") })}
-    ${inputField(r, "method_description", "Method description", errs, { type: "area", hint: "How the trait is collected" })}
-    ${val(r, "method_class") === "Computation" ? inputField(r, "method_formula", "Method formula", errs, { req: 1, type: "area" }) : ""}
-    ${val(r, "method_class") === "Computation" ? `<div class="hint">Scale class is set to Numerical for computations.</div>`
-      : inputField(r, "scale_class", "Scale class", errs, { req: 1, type: "select", choices: ["", ...meta.scale_classes], before: optsBlock(r, "scale_class") })}
-    ${isNumeric(r) ? inputField(r, "units", "Units", errs, { req: 1, list: "units-list", before: optsBlock(r, "units"),
-      after: `<datalist id="units-list">${[...new Set([...(r.consensus?.units.options || []).map(o => o.value), ...COMMON_UNITS])].map(u => `<option value="${esc(u)}">`).join("")}</datalist>` }) : ""}
-    ${isNumeric(r) ? `<div class="two">${inputField(r, "scale_decimal_places", "Decimal places", errs, { type: "number" })}</div>
-      <div class="two">${inputField(r, "scale_lower_limit", "Lower limit", errs, { type: "number" })}${inputField(r, "scale_upper_limit", "Upper limit", errs, { type: "number" })}</div>` : ""}
-    ${needsCats(r) ? catsEditor(r, errs) : ""}`;
-  d.hidden = false; d.scrollTop = scrollTop;
-  document.querySelectorAll("#grid tr.sel").forEach(t => t.classList.remove("sel"));
-  $(`tr[data-uid="${id}"]`)?.classList.add("sel");
-  loadPresets(r);
+  const d = $("#drawer"), y = window.scrollY;
+  d.innerHTML = formHtml(r, validate(r));
+  window.scrollTo(0, y);
+  if (o.focus) d.querySelector(`[data-f="${o.focus}"]`)?.focus();
+  renderSidebar(); loadPresets(r);
 }
-function closeDrawer() { selected = null; $("#drawer").hidden = true; document.querySelectorAll("#grid tr.sel").forEach(t => t.classList.remove("sel")); }
+
+/* Update the parts of the form that depend on the current values, without replacing any input (keeps focus). */
+function refreshLive(r) {
+  if (selected !== r.uid) return;
+  const d = $("#drawer"), errs = validate(r), nEd = editedKeys(r).length;
+  d.querySelectorAll("[data-f]").forEach(el => el.classList.toggle("edited", isEdited(r, el.dataset.f)));
+  d.querySelectorAll(".resetbtn").forEach(b => { b.hidden = !isEdited(r, b.dataset.reset); });
+  d.querySelectorAll("[data-err]").forEach(el => { const m = errs[el.dataset.err]; el.hidden = !m; el.textContent = m || ""; });
+  CONSENSUS_KEYS.forEach(k => refreshMeter(r, k));
+  const sim = $("#drawer [data-sim]"); if (sim) sim.outerHTML = simHtml(r);
+  const b = $("#drawer [data-edcount]"); if (b) { b.hidden = !nEd; b.querySelector("span").textContent = `${nEd} field${nEd > 1 ? "s" : ""}`; }
+  const t = $("#drawer [data-compose=trait]"), m = $("#drawer [data-compose=method]");
+  if (t) t.textContent = composeTrait(r); if (m) m.textContent = composeMethod(r);
+  const c = $("#drawer [data-count]"); if (c) { const n = String(val(r, "name")).length; c.textContent = `${n}/16`; c.classList.toggle("over", n > 16); }
+}
 
 function readCats() {
   return [...document.querySelectorAll("#drawer .catrow")].map(row => [...row.querySelectorAll("input")].map(i => i.value));
 }
 $("#drawer").addEventListener("input", e => {
+  const r = cur(); if (!r) return;
   if (e.target.dataset.cat) {  // structured category rows → "label=meaning; …"
     e.target.value = e.target.value.replace(/[=;]/g, "");
-    return setField(rows.find(x => x.uid === selected), "scale_categories", joinCats(readCats()));
+    setField(r, "scale_categories", joinCats(readCats())); return refreshLive(r);
   }
   const k = e.target.dataset.f; if (!k || e.target.tagName === "SELECT") return;
-  setField(rows.find(x => x.uid === selected), k, e.target.value);
+  setField(r, k, e.target.value); refreshLive(r);
 });
 $("#drawer").addEventListener("change", e => {
-  const k = e.target.dataset.f; if (!k) return;
-  const r = rows.find(x => x.uid === selected);
+  const r = cur(); if (!r) return;
+  if (e.target.matches("[data-status]")) {
+    setField(r, "status", e.target.checked ? "active" : "archived");
+    e.target.closest(".toggle").querySelector("span").textContent = e.target.checked ? "Active" : "Archived"; return refreshLive(r);
+  }
+  const k = e.target.dataset.f; if (!k || e.target.tagName !== "SELECT") return;
   setField(r, k, e.target.value);
-  renderGrid(); openDrawer(r.uid);  // method/scale changes alter which fields apply
+  if (STRUCTURAL.includes(k)) { renderGrid(); openDrawer(r.uid, { focus: k }); }  // other fields appear/disappear
+  else refreshLive(r);
 });
 $("#drawer").addEventListener("click", e => {
-  const r = rows.find(x => x.uid === selected);
-  if (e.target.closest("[data-close]")) return closeDrawer();
+  const r = cur(); if (!r) return;
   if (e.target.closest("[data-rematch]")) { replaceUid = r.uid; $("#q").placeholder = `Search for the right match for “${val(r, "full_name") || val(r, "name")}”…`; $("#q").focus(); window.scrollTo({ top: 0, behavior: "smooth" }); return; }
   const cand = e.target.closest("[data-cand]"); if (cand) { replaceUid = r.uid; addById(cand.dataset.cand); return; }
+  const tog = e.target.closest("[data-toggle-opts]");
+  if (tog) { const k = tog.dataset.toggleOpts, sk = r.uid + ":" + k; openState.set(sk, !(openState.has(sk) ? openState.get(sk) : !!$(`#drawer [data-meter="${k}"] .opts`))); return refreshMeter(r, k); }
   const reset = e.target.closest("[data-reset]");
   if (reset) { resetField(r, reset.dataset.reset); renderGrid(); return openDrawer(r.uid); }
   if (e.target.closest("[data-reset-all]")) { r.fields = { ...r.original }; r.confirmed = {}; save(); renderGrid(); renderSummary(); return openDrawer(r.uid); }
@@ -460,6 +567,31 @@ $("#drawer").addEventListener("click", e => {
   choose(r, k, optionList(r, k)[+opt.dataset.i].value);
   catsBlank = 0; renderGrid(); openDrawer(r.uid);
 });
+
+/* ---------- trait list (left) and view switch ---------- */
+function renderSidebar() {
+  const sb = $("#sidebar"); if (!sb || view !== "form") return;
+  sb.innerHTML = `<div class="shead">Traits <span>${rows.length}</span></div>` + rows.map(r => {
+    const s = rowStatus(r), sim = similarity(r), pct = sim?.overall != null ? pctOf(sim.overall) : null;
+    return `<div class="sitem ${r.uid === selected ? "sel" : ""}" data-uid="${r.uid}"><i class="dot ${s === "ready" ? "strong" : s}" title="${{ ready: "Ready", weak: "Needs a decision", missing: "Missing required fields" }[s]}"></i>
+      <div class="stxt"><b>${esc(val(r, "name") || "(unnamed)")}</b><small>${esc(val(r, "full_name"))}</small>
+        ${pct != null ? `<div class="mbar tiny ${sim.level}"><i style="width:${pct}%"></i></div>` : ""}</div>
+      ${editedKeys(r).length ? '<span class="edmark" title="Customised by you">✎</span>' : ""}<span class="spct">${pct != null ? pct + "%" : "—"}</span>
+      <button class="iconbtn" data-del title="Remove">✕</button></div>`;
+  }).join("");
+}
+$("#sidebar").addEventListener("click", e => {
+  const it = e.target.closest(".sitem"); if (!it) return;
+  const id = it.dataset.uid;
+  if (e.target.closest("[data-del]")) { rows = rows.filter(r => r.uid !== id); if (selected === id) selected = null; save(); return renderAll(); }
+  openDrawer(id);
+});
+document.querySelectorAll("[data-view]").forEach(b => b.addEventListener("click", () => {
+  view = b.dataset.view; try { localStorage.setItem("ctb-view", view); } catch (e) { /* ignore */ }
+  renderAll();
+}));
+function showRow(id) { selected = id; view = "form"; renderAll(); }
+
 function choose(r, k, v) { setField(r, k, v); }
 function resetField(r, k) { r.fields[k] = r.original[k]; delete r.confirmed[k]; save(); renderSummary(); }
 
